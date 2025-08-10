@@ -1,119 +1,71 @@
-import { Server, Tool, StdioServerTransport } from '@modelcontextprotocol/sdk/server/index.js';
-import { TextContent } from '@modelcontextprotocol/sdk/types.js';
-import { SqlClient, SqlConnectionParams } from './sql.js';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { z } from 'zod';
+import type { TextContent } from '@modelcontextprotocol/sdk/types.js';
+import { SqlClient, type SqlConnectionParams } from './sql.js';
 
 const sqlClient = new SqlClient();
 
-function makeText(text: string): TextContent {
-  return { type: 'text', text };
-}
+function textContent(text: string): TextContent { return { type: 'text', text }; }
 
-const tools: Tool[] = [
-  {
-    name: 'connect',
-    description: 'Connect to a SQL Server. Inputs: server, port, user, password, database, encrypt',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        server: { type: 'string' },
-        port: { type: 'number' },
-        user: { type: 'string' },
-        password: { type: 'string' },
-        database: { type: 'string' },
-        encrypt: { type: 'boolean' },
-      },
-      required: ['server', 'user', 'password'],
-      additionalProperties: false,
-    },
-  },
-  {
-    name: 'disconnect',
-    description: 'Disconnect from SQL Server',
-    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
-  },
-  {
-    name: 'query',
-    description: 'Run a SQL query and return rows',
-    inputSchema: {
-      type: 'object',
-      properties: { sql: { type: 'string' } },
-      required: ['sql'],
-      additionalProperties: false,
-    },
-  },
-  {
-    name: 'info',
-    description: 'Get SQL Server version and basic info',
-    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
-  },
-  {
-    name: 'list_databases',
-    description: 'List databases',
-    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
-  },
-  {
-    name: 'list_schemas',
-    description: 'List schemas',
-    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
-  },
-  {
-    name: 'list_tables',
-    description: 'List tables; optional schema filter',
-    inputSchema: {
-      type: 'object',
-      properties: { schema: { type: 'string' } },
-      additionalProperties: false,
-    },
-  },
-];
-
-const server = new Server({
-  name: 'sql-server-mcp',
-  version: '0.1.0',
-  tools,
+const mcp = new McpServer({ name: 'sql-server-mcp', version: '0.1.0' }, {
+  capabilities: { tools: {} },
+  instructions: 'Use the connect tool first to establish a SQL Server connection, then query or browse schema.',
 });
 
-server.tool('connect', async (args) => {
-  const params = args as SqlConnectionParams;
-  await sqlClient.connect(params);
-  return { content: [makeText('Connected successfully')] };
-});
+mcp.tool('connect',
+  {
+    server: z.string().describe('SQL Server host or host\\instance'),
+    port: z.number().int().positive().optional().describe('TCP port; default 1433'),
+    user: z.string().describe('SQL login user'),
+    password: z.string().describe('SQL login password'),
+    database: z.string().optional().describe('Database name; default master'),
+    encrypt: z.boolean().optional().describe('Enable TLS encryption; default true'),
+  },
+  async (args) => {
+    const params = args as unknown as SqlConnectionParams;
+    await sqlClient.connect(params);
+    return { content: [textContent('Connected successfully')] };
+  }
+);
 
-server.tool('disconnect', async () => {
+mcp.tool('disconnect', async () => {
   await sqlClient.disconnect();
-  return { content: [makeText('Disconnected')] };
+  return { content: [textContent('Disconnected')] };
 });
 
-server.tool('query', async (args) => {
-  const { sql: sqlText } = args as { sql: string };
-  const result = await sqlClient.query(sqlText);
-  return {
-    content: [
-      makeText(JSON.stringify({ rowsAffected: result.rowsAffected, recordset: result.recordset }, null, 2)),
-    ],
-  };
-});
+mcp.tool('query',
+  { sql: z.string().describe('SQL text to execute') },
+  async ({ sql }) => {
+    const result = await sqlClient.query(sql);
+    return {
+      content: [textContent(JSON.stringify({ rowsAffected: result.rowsAffected, recordset: result.recordset }, null, 2))],
+    };
+  }
+);
 
-server.tool('info', async () => {
+mcp.tool('info', async () => {
   const version = await sqlClient.getVersion();
-  return { content: [makeText(version)] };
+  return { content: [textContent(version)] };
 });
 
-server.tool('list_databases', async () => {
+mcp.tool('list_databases', async () => {
   const dbs = await sqlClient.listDatabases();
-  return { content: [makeText(JSON.stringify(dbs, null, 2))] };
+  return { content: [textContent(JSON.stringify(dbs, null, 2))] };
 });
 
-server.tool('list_schemas', async () => {
+mcp.tool('list_schemas', async () => {
   const schemas = await sqlClient.listSchemas();
-  return { content: [makeText(JSON.stringify(schemas, null, 2))] };
+  return { content: [textContent(JSON.stringify(schemas, null, 2))] };
 });
 
-server.tool('list_tables', async (args) => {
-  const { schema } = (args ?? {}) as { schema?: string };
-  const tables = await sqlClient.listTables(schema);
-  return { content: [makeText(JSON.stringify(tables, null, 2))] };
-});
+mcp.tool('list_tables',
+  { schema: z.string().optional().describe('Optional schema filter') },
+  async ({ schema }) => {
+    const tables = await sqlClient.listTables(schema);
+    return { content: [textContent(JSON.stringify(tables, null, 2))] };
+  }
+);
 
 const transport = new StdioServerTransport();
-await server.connect(transport);
+await mcp.connect(transport);
