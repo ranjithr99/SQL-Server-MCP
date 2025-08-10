@@ -1,6 +1,6 @@
 ## SQL Server MCP (Model Context Protocol) Server
 
-A minimal MCP stdio server that connects to Microsoft SQL Server using provided credentials and exposes tools to query and discover schema.
+A lightweight MCP stdio server that connects to Microsoft SQL Server using provided credentials and exposes tools to query and discover schema.
 
 ### Features
 - **connect**: Connect by `server`, `port`, `user`, `password`, optional `database`, `encrypt`.
