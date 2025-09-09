@@ -9,11 +9,28 @@ export type SqlConnectionParams = {
   encrypt?: boolean;
 };
 
+function validateConnectionParams(params: SqlConnectionParams): void {
+  if (!params.server?.trim()) {
+    throw new Error('Server hostname is required');
+  }
+  if (!params.user?.trim()) {
+    throw new Error('Username is required');
+  }
+  if (!params.password) {
+    throw new Error('Password is required');
+  }
+  if (params.port && (params.port < 1 || params.port > 65535)) {
+    throw new Error('Port must be between 1 and 65535');
+  }
+}
+
 export class SqlClient {
   private pool: sql.ConnectionPool | null = null;
   private currentConfig: sql.config | null = null;
 
   async connect(params: SqlConnectionParams): Promise<void> {
+    validateConnectionParams(params);
+    
     const { server, port = 1433, user, password, database = 'master', encrypt = true } = params;
     const config: sql.config = {
       server,
@@ -23,7 +40,7 @@ export class SqlClient {
       database,
       options: {
         encrypt,
-        trustServerCertificate: encrypt ? false : true,
+        trustServerCertificate: false,
         enableArithAbort: true,
       },
       pool: {
@@ -31,15 +48,27 @@ export class SqlClient {
         min: 0,
         idleTimeoutMillis: 30000,
       },
-    } as unknown as sql.config;
+      connectionTimeout: 15000,
+      requestTimeout: 15000,
+    };
 
     if (this.pool) {
-      try { await this.pool.close(); } catch {}
+      try { 
+        await this.pool.close(); 
+      } catch (error) {
+        console.error('Error closing existing connection:', error instanceof Error ? error.message : String(error));
+      }
       this.pool = null;
     }
 
-    this.pool = await new sql.ConnectionPool(config).connect();
-    this.currentConfig = config;
+    try {
+      this.pool = await new sql.ConnectionPool(config).connect();
+      this.currentConfig = config;
+    } catch (error) {
+      this.pool = null;
+      this.currentConfig = null;
+      throw new Error(`Failed to connect to SQL Server: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   isConnected(): boolean {
@@ -48,17 +77,35 @@ export class SqlClient {
 
   async disconnect(): Promise<void> {
     if (this.pool) {
-      await this.pool.close();
-      this.pool = null;
-      this.currentConfig = null;
+      try {
+        await this.pool.close();
+      } catch (error) {
+        console.error('Error during disconnect:', error instanceof Error ? error.message : String(error));
+      } finally {
+        this.pool = null;
+        this.currentConfig = null;
+      }
     }
   }
 
-  async query(queryText: string): Promise<sql.IResult<any>> {
+  async query(queryText: string, parameters?: { [key: string]: any }): Promise<sql.IResult<any>> {
     if (!this.pool || !this.pool.connected) {
-      throw new Error('Not connected to SQL Server');
+      throw new Error('Not connected to SQL Server. Use connect tool first.');
     }
-    return this.pool.request().query(queryText);
+    
+    try {
+      const request = this.pool.request();
+      
+      if (parameters) {
+        for (const [key, value] of Object.entries(parameters)) {
+          request.input(key, value);
+        }
+      }
+      
+      return await request.query(queryText);
+    } catch (error) {
+      throw new Error(`SQL execution failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   async getVersion(): Promise<string> {
